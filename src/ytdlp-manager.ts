@@ -6,6 +6,8 @@ import type { Logger } from "./utils.ts";
 
 const GITHUB_API_LATEST =
   "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
+const GITHUB_API_LATEST_NIGHTLY =
+  "https://api.github.com/repos/yt-dlp/yt-dlp-nightly-builds/releases/latest";
 
 interface BinarySpec {
   assetName: string;
@@ -36,13 +38,27 @@ function getBinarySpec(): BinarySpec {
   };
 }
 
-function downloadUrl(assetName: string, version: string): string {
-  return `https://github.com/yt-dlp/yt-dlp/releases/download/${version}/${assetName}`;
+function downloadUrl(
+  assetName: string,
+  version: string,
+  channel: "stable" | "nightly",
+): string {
+  const repo =
+    channel === "nightly"
+      ? "yt-dlp/yt-dlp-nightly-builds"
+      : "yt-dlp/yt-dlp";
+  return `https://github.com/${repo}/releases/download/${version}/${assetName}`;
 }
 
-async function fetchLatestVersion(): Promise<string | null> {
+function latestVersionUrl(channel: "stable" | "nightly"): string {
+  return channel === "nightly" ? GITHUB_API_LATEST_NIGHTLY : GITHUB_API_LATEST;
+}
+
+async function fetchLatestVersion(
+  channel: "stable" | "nightly",
+): Promise<string | null> {
   try {
-    const response = await fetch(GITHUB_API_LATEST, {
+    const response = await fetch(latestVersionUrl(channel), {
       headers: { Accept: "application/vnd.github+json" },
     });
 
@@ -103,13 +119,33 @@ export async function ensureYtdlp(
     return binPath;
   }
 
-  logger.info("Checking for yt-dlp updates...");
-  const latestVersion = await fetchLatestVersion();
+  logger.info(`Checking for yt-dlp ${config.ytdlpChannel} updates...`);
+  const latestVersion = await fetchLatestVersion(config.ytdlpChannel);
   const localVersion = await getLocalVersion(binPath);
+  // Stable releases are tagged like "2026.06.09"; nightly builds report
+  // "2026.06.18.235958" (four dot-separated numeric groups).
+  const localIsNightly =
+    localVersion?.split(".").length === 4 &&
+    /^\d+$/.test(localVersion.split(".").pop() ?? "");
 
-  if (latestVersion && localVersion && latestVersion === localVersion) {
-    logger.success(`yt-dlp is up to date (${localVersion})`);
-    return binPath;
+  if (latestVersion && localVersion) {
+    const channelMatches =
+      config.ytdlpChannel === "nightly" ? localIsNightly : !localIsNightly;
+
+    if (latestVersion === localVersion && channelMatches) {
+      logger.success(`yt-dlp is up to date (${localVersion})`);
+      return binPath;
+    }
+
+    // Avoid silently downgrading from a nightly build when stable is selected.
+    // The user can explicitly switch back to stable by deleting the binary.
+    if (config.ytdlpChannel === "stable" && localIsNightly) {
+      logger.warn(
+        `yt-dlp nightly (${localVersion}) is installed while stable channel is selected. ` +
+          `Keeping nightly to avoid downgrading. Use --ytdlp-channel nightly to receive nightly updates.`,
+      );
+      return binPath;
+    }
   }
 
   if (latestVersion) {
@@ -125,7 +161,7 @@ export async function ensureYtdlp(
   }
 
   const version = latestVersion ?? "latest";
-  const url = downloadUrl(spec.assetName, version);
+  const url = downloadUrl(spec.assetName, version, config.ytdlpChannel);
   await downloadBinary(url, binPath, logger);
 
   if (platform() !== "win32") {

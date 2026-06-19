@@ -12,6 +12,7 @@ export const cliFlagsSchema = z.object({
     .default("%(playlist_index)02d - %(title)s - %(artist)s.%(ext)s"),
   skipUpdate: z.boolean().default(false),
   verbose: z.boolean().default(false),
+  ytdlpChannel: z.enum(["stable", "nightly"]).default("stable"),
 });
 
 export type CliFlags = z.infer<typeof cliFlagsSchema>;
@@ -51,6 +52,7 @@ export const ytdlpPlaylistSchema = z.object({
   webpage_url: z.string().nullable().default(null),
   original_url: z.string().nullable().default(null),
   extractor: z.string().default("generic"),
+  playlist_count: z.union([z.number(), z.string()]).nullable().default(null),
   entries: z.array(z.unknown()).default([]),
 });
 

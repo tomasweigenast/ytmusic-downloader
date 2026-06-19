@@ -18,7 +18,7 @@ export interface ProgressUpdate {
   eta: string;
 }
 
-const PROGRESS_RE = /^download:(\S+)\s+(\S+)(?:\s+(\S+))?\s*(?:\s+ETA\s+(\S+))?/;
+const PROGRESS_RE = /^(\S+)\s+(\S+%)\s+(\S+)\s+ETA\s+(\S+)/;
 
 function buildArgs(
   config: AppConfig,
@@ -42,6 +42,7 @@ function buildArgs(
     "--continue",
     "--no-overwrites",
     "--no-warnings",
+    "--no-colors",
     "--newline",
     "--progress-template",
     "download:%(info.id)s %(progress._percent_str)s %(progress._speed_str)s ETA %(progress._eta_str)s",
@@ -63,8 +64,14 @@ function buildArgs(
   return args;
 }
 
+function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 function parseProgressLine(line: string): ProgressUpdate | null {
-  const match = PROGRESS_RE.exec(line);
+  const cleaned = stripAnsi(line.trim());
+  const match = PROGRESS_RE.exec(cleaned);
   if (!match) return null;
 
   const percentStr = match[2];
@@ -98,6 +105,36 @@ async function findInfoJson(outputDir: string, sourceId: string): Promise<string
   return null;
 }
 
+async function readLines(
+  stream: ReadableStream<Uint8Array>,
+  onLine: (line: string) => void,
+): Promise<void> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        onLine(line);
+      }
+    }
+
+    if (buffer) {
+      onLine(buffer);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function spawnYtdlp(
   args: string[],
   onProgress: (update: ProgressUpdate) => void,
@@ -110,55 +147,30 @@ async function spawnYtdlp(
     stderr: "pipe",
   });
 
-  const decoder = new TextDecoder();
-  let stderrBuffer = "";
   let errorSummary = "";
 
-  // Drain stdout silently so the process doesn't block on a full buffer
-  const drainStdout = async () => {
-    const reader = proc.stdout.getReader();
-    try {
-      while (true) {
-        const { done } = await reader.read();
-        if (done) break;
+  const readStdout = async (): Promise<void> => {
+    await readLines(proc.stdout, (line) => {
+      const progress = parseProgressLine(line);
+      if (progress) {
+        onProgress(progress);
       }
-    } finally {
-      reader.releaseLock();
-    }
+    });
   };
 
-  // Bun.spawn's stderr is a ReadableStream<Uint8Array>
-  const reader = proc.stderr.getReader();
-  drainStdout();
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      stderrBuffer += decoder.decode(value, { stream: true });
-      const lines = stderrBuffer.split("\n");
-      stderrBuffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        const progress = parseProgressLine(line);
-        if (progress) {
-          onProgress(progress);
-          continue;
-        }
-
-        // Keep the last non-progress error line for diagnostics
-        const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith("[download]") && !trimmed.startsWith("[ExtractAudio]") && !trimmed.startsWith("[Metadata]") && !trimmed.startsWith("[ThumbnailsConvertor]")) {
-          errorSummary = trimmed;
-        }
+  const readStderr = async (): Promise<void> => {
+    await readLines(proc.stderr, (line) => {
+      // Keep the last non-progress error line for diagnostics
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith("[download]") && !trimmed.startsWith("[ExtractAudio]") && !trimmed.startsWith("[Metadata]") && !trimmed.startsWith("[ThumbnailsConvertor]")) {
+        errorSummary = trimmed;
       }
-    }
-  } finally {
-    reader.releaseLock();
-  }
+    });
+  };
 
+  await Promise.all([readStdout(), readStderr()]);
   const exitCode = await proc.exited;
+
   return { exitCode, error: errorSummary };
 }
 

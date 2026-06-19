@@ -99,7 +99,7 @@ async function runDownload(
       uploader: extracted.uploader,
       description: extracted.description,
       thumbnail: extracted.thumbnail,
-      trackCount: extracted.entries.length,
+      trackCount: extracted.playlistCount ?? extracted.entries.length,
       rawJson: extracted.rawJson,
     });
 
@@ -226,7 +226,11 @@ async function main(): Promise<void> {
     })
     .option("--skip-update", "Skip yt-dlp update check")
     .option("--verbose", "Enable verbose logging")
-    .option("--no-tui", "Disable the TUI and print logs to stdout");
+    .option("--no-tui", "Disable the TUI and print logs to stdout")
+    .option(
+      "--ytdlp-channel <channel>",
+      "yt-dlp release channel to use: stable or nightly (default: stable)",
+    );
 
   const parsed = cli.parse();
 

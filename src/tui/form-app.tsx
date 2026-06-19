@@ -113,6 +113,7 @@ export function FormApp({ onSubmit, onCancel }: FormAppProps): JSX.Element {
         filenameTemplate: "%(playlist_index)02d - %(title)s - %(artist)s.%(ext)s",
         skipUpdate: form.skipUpdate,
         verbose: form.verbose,
+        ytdlpChannel: "stable",
       });
     }
   });
