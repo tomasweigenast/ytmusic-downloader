@@ -1,0 +1,27 @@
+{
+  "name": "ytmusic-downloader",
+  "version": "0.1.0",
+  "description": "Download YouTube Music playlists with metadata preserved",
+  "module": "src/cli.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun src/cli.ts",
+    "build": "bun build src/cli.ts --outdir ./dist",
+    "compile": "bun build src/cli.ts --compile --outfile ytmusic-downloader",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@types/react": "^18.3.12",
+    "cac": "^6.7.14",
+    "ink": "^4.4.1",
+    "react": "^18.3.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.5.4"
+  },
+  "peerDependencies": {
+    "typescript": "^5.5.4"
+  }
+}
