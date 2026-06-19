@@ -43,7 +43,7 @@ export async function extractPlaylist(
   const args = buildArgs(config);
   logger.debug(`Running: ${args.join(" ")}`);
 
-  const result = await $`${args}`.nothrow();
+  const result = await $`${args}`.quiet().nothrow();
 
   if (result.exitCode !== 0) {
     throw new Error(
@@ -61,7 +61,7 @@ export async function extractPlaylist(
       const e = entry as Record<string, unknown>;
       const id = String(e.id ?? "");
       const url = String(
-        e.url ?? e.webpage_url ?? e.original_url ?? `https://youtu.be/${id}`,
+        e.url ?? e.webpage_url ?? e.original_url ?? `https://music.youtube.com/watch?v=${id}`,
       );
       const title = String(e.title ?? "Unknown Title");
       const playlistIndex =

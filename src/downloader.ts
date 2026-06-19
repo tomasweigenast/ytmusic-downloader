@@ -106,7 +106,7 @@ async function spawnYtdlp(
   logger.debug(`Running: ${args.join(" ")}`);
 
   const proc = Bun.spawn(args, {
-    stdout: "inherit",
+    stdout: "pipe",
     stderr: "pipe",
   });
 
@@ -114,8 +114,23 @@ async function spawnYtdlp(
   let stderrBuffer = "";
   let errorSummary = "";
 
+  // Drain stdout silently so the process doesn't block on a full buffer
+  const drainStdout = async () => {
+    const reader = proc.stdout.getReader();
+    try {
+      while (true) {
+        const { done } = await reader.read();
+        if (done) break;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  };
+
   // Bun.spawn's stderr is a ReadableStream<Uint8Array>
   const reader = proc.stderr.getReader();
+  drainStdout();
+
   try {
     while (true) {
       const { done, value } = await reader.read();

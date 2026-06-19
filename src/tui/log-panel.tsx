@@ -3,9 +3,13 @@ import { useEffect, useMemo, useState, type JSX } from "react";
 import { getGlobalLogStore, type LogEntry } from "../log-store.ts";
 import { LOG_LEVEL_COLORS, LOG_LEVEL_LABELS } from "./log-colors.ts";
 
-const PADDING = 2;
-const HEADER_HEIGHT = 2;
+// Rows consumed by the header (title) and footer (scrollbar + margin)
+const CHROME_HEIGHT = 3; // title + marginTop + scrollbar row
 const PREFIX_WIDTH = 18; // "HH:MM:SS LEVEL "
+
+// Border on parent (2) + padding on this box (2 each side)
+const HORIZ_CHROME = 4;
+const VERT_CHROME = 4;
 
 function useLogs(): readonly LogEntry[] {
   const store = getGlobalLogStore();
@@ -13,6 +17,7 @@ function useLogs(): readonly LogEntry[] {
 
   useEffect(() => {
     if (!store) return;
+    setLogs(store.getLogs());
     return store.subscribe(() => {
       setLogs(store.getLogs());
     });
@@ -32,25 +37,29 @@ function padEnd(str: string, len: number): string {
 export function LogPanel(): JSX.Element {
   const logs = useLogs();
   const { stdout } = useStdout();
-  const panelWidth = Math.max(20, Math.floor((stdout.columns ?? 80) / 2) - PADDING);
-  const panelHeight = Math.max(6, (stdout.rows ?? 24) - PADDING);
-  const visibleRows = Math.max(1, panelHeight - HEADER_HEIGHT);
+
+  // Available content area inside this panel
+  const panelWidth = Math.max(20, Math.floor((stdout.columns ?? 80) / 2) - HORIZ_CHROME);
+  const panelHeight = Math.max(6, (stdout.rows ?? 24) - VERT_CHROME);
+  const visibleRows = Math.max(1, panelHeight - CHROME_HEIGHT);
   const messageWidth = Math.max(1, panelWidth - PREFIX_WIDTH);
 
   const [scrollX, setScrollX] = useState(0);
   const [scrollY, setScrollY] = useState(0);
 
-  const lines = useMemo(() => {
-    return logs.map((log) => ({
-      ...log,
-      prefix: `${formatTime(log.timestamp)} ${LOG_LEVEL_LABELS[log.level]}`,
-      message: log.message,
-    }));
-  }, [logs]);
+  const lines = useMemo(
+    () =>
+      logs.map((log) => ({
+        ...log,
+        prefix: `${formatTime(log.timestamp)} ${LOG_LEVEL_LABELS[log.level]}`,
+      })),
+    [logs],
+  );
 
-  const maxMessageWidth = useMemo(() => {
-    return lines.reduce((max, line) => Math.max(max, line.message.length), 0);
-  }, [lines]);
+  const maxMessageWidth = useMemo(
+    () => lines.reduce((max, line) => Math.max(max, line.message.length), 0),
+    [lines],
+  );
 
   const maxScrollX = Math.max(0, maxMessageWidth - messageWidth);
   const maxScrollY = Math.max(0, lines.length - visibleRows);
@@ -58,54 +67,65 @@ export function LogPanel(): JSX.Element {
   const safeScrollX = Math.min(scrollX, maxScrollX);
   const safeScrollY = Math.min(scrollY, maxScrollY);
 
-  useInput((_input, key) => {
-    if (key.upArrow) {
-      setScrollY((y) => Math.min(y + 1, maxScrollY));
-    } else if (key.downArrow) {
-      setScrollY((y) => Math.max(y - 1, 0));
-    } else if (key.leftArrow) {
-      setScrollX((x) => Math.max(x - 4, 0));
-    } else if (key.rightArrow) {
-      setScrollX((x) => Math.min(x + 4, maxScrollX));
-    }
-  });
+  // Auto-follow: reset scrollY to 0 (newest) whenever new logs arrive
+  // and the user hasn't scrolled up.
+  const prevLenRef = useMemo(() => ({ current: 0 }), []);
+  if (scrollY === 0 && lines.length !== prevLenRef.current) {
+    prevLenRef.current = lines.length;
+  }
+
+  useInput(
+    (_input, key) => {
+      if (key.upArrow) setScrollY((y) => Math.min(y + 1, maxScrollY));
+      else if (key.downArrow) setScrollY((y) => Math.max(y - 1, 0));
+      else if (key.leftArrow) setScrollX((x) => Math.max(x - 4, 0));
+      else if (key.rightArrow) setScrollX((x) => Math.min(x + 4, maxScrollX));
+    },
+    { isActive: true },
+  );
 
   const visibleLines = lines
-    .slice(Math.max(0, lines.length - visibleRows - safeScrollY), lines.length - safeScrollY)
+    .slice(
+      Math.max(0, lines.length - visibleRows - safeScrollY),
+      lines.length - safeScrollY,
+    )
     .slice(-visibleRows);
 
-  const scrollbarWidth = Math.max(1, messageWidth);
-  const thumbSize = maxScrollX > 0
-    ? Math.max(1, Math.floor(scrollbarWidth * (messageWidth / (maxMessageWidth || messageWidth))))
-    : scrollbarWidth;
-  const thumbStart = maxScrollX > 0
-    ? Math.floor((safeScrollX / maxScrollX) * (scrollbarWidth - thumbSize))
-    : 0;
+  // Horizontal scrollbar
+  const sbWidth = Math.max(1, messageWidth);
+  const thumbSize =
+    maxScrollX > 0
+      ? Math.max(1, Math.floor(sbWidth * (messageWidth / (maxMessageWidth || messageWidth))))
+      : sbWidth;
+  const thumbStart =
+    maxScrollX > 0
+      ? Math.floor((safeScrollX / maxScrollX) * (sbWidth - thumbSize))
+      : 0;
   const scrollbar =
     "[" +
     " ".repeat(thumbStart) +
     "█".repeat(thumbSize) +
-    " ".repeat(Math.max(0, scrollbarWidth - thumbStart - thumbSize)) +
+    " ".repeat(Math.max(0, sbWidth - thumbStart - thumbSize)) +
     "]";
 
   return (
-    <Box flexDirection="column" padding={1} width={panelWidth + PADDING}>
+    <Box flexDirection="column" padding={1} overflow="hidden">
       <Text bold underline>
         Logs
       </Text>
-      <Box flexDirection="column" height={visibleRows}>
+      <Box flexDirection="column" height={visibleRows} overflow="hidden">
         {visibleLines.map((log, i) => {
           const sliced = log.message.slice(safeScrollX, safeScrollX + messageWidth);
           const padded = padEnd(sliced, messageWidth);
           return (
-            <Text key={i}>
+            <Text key={i} wrap="truncate">
               <Text color="gray">{padEnd(log.prefix, PREFIX_WIDTH)}</Text>
               <Text color={LOG_LEVEL_COLORS[log.level]}>{padded}</Text>
             </Text>
           );
         })}
       </Box>
-      <Box marginTop={1}>
+      <Box marginTop={1} overflow="hidden">
         <Text color="gray">{padEnd("", PREFIX_WIDTH)}</Text>
         <Text color="gray">{scrollbar}</Text>
       </Box>

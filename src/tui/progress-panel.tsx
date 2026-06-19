@@ -33,6 +33,7 @@ function useProgressState(): ProgressState {
 
   useEffect(() => {
     if (!store) return;
+    setState(store.getState());
     return store.subscribe(() => {
       setState(store.getState());
     });
