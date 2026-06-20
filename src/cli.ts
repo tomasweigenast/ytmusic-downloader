@@ -110,6 +110,7 @@ async function runDownload(
 
     logger.info(`Playlist saved: ${playlist.title}`);
 
+    progress.setPhase("Checking existing downloads…");
     const checks = extracted.entries.map((entry) => ({
       entry,
       check: checkExistingDownload(db, playlist.id, entry, config.outputDir),
@@ -167,7 +168,9 @@ async function runDownload(
         }
 
         progress.setFailed(entry.id);
-        logger.error(`Failed "${entry.title}": ${lastError}`);
+        const errMsg = `"${entry.title}": ${lastError}`;
+        logger.error(`Failed ${errMsg}`);
+        progress.addError(errMsg);
       });
     }
 
@@ -201,14 +204,17 @@ async function runWithFlags(flags: CliFlags, useTui: boolean): Promise<void> {
   logger.info(`Log file: ${logFilePath}`);
 
   try {
+    progressStore.setPhase("Checking yt-dlp…");
     const ytdlpPath = await ensureYtdlp(config, logger);
     logger.debug(`yt-dlp binary: ${ytdlpPath}`);
 
+    progressStore.setPhase("Checking ffmpeg…");
     const hasFfmpeg = await checkFfmpeg();
     if (!hasFfmpeg) {
       logger.warn("ffmpeg not found in PATH. Audio extraction and thumbnail embedding may fail.");
     }
 
+    progressStore.setPhase("Fetching playlist…");
     await runDownload(config, logger, progressStore);
   } finally {
     tuiUnmount?.();
@@ -234,9 +240,10 @@ async function main(): Promise<void> {
     .option("--cookies-from-browser <browser>", "Load cookies from browser (e.g. firefox, chrome)")
     .option("--cookies <file>", "Load cookies from a cookies.txt file")
     .option("--filename-template <template>", "yt-dlp output template for filenames", {
-      default: "%(playlist_index)02d - %(title)s - %(artist)s.%(ext)s",
+      default: "%(title)s - %(album)s - %(artist)s.%(ext)s",
     })
     .option("--skip-update", "Skip yt-dlp update check")
+    .option("--opus", "Use Opus format instead of M4A (smaller files, less compatible cover art)")
     .option("--verbose", "Enable verbose logging")
     .option("--no-tui", "Disable the TUI and print logs to stdout")
     .option(

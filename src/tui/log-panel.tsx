@@ -12,16 +12,29 @@ const HORIZ_CHROME = 4;
 const VERT_CHROME = 4;
 
 function useLogs(): readonly LogEntry[] {
-  const store = getGlobalLogStore();
-  const [logs, setLogs] = useState<readonly LogEntry[]>(() => store?.getLogs() ?? []);
+  const [logs, setLogs] = useState<readonly LogEntry[]>([]);
 
   useEffect(() => {
-    if (!store) return;
-    setLogs(store.getLogs());
-    return store.subscribe(() => {
+    function attach(): (() => void) | undefined {
+      const store = getGlobalLogStore();
+      if (!store) return undefined;
       setLogs(store.getLogs());
-    });
-  }, [store]);
+      return store.subscribe(() => setLogs(store.getLogs()));
+    }
+
+    const unsub = attach();
+    if (unsub) return unsub;
+
+    const interval = setInterval(() => {
+      const unsub = attach();
+      if (unsub) {
+        clearInterval(interval);
+        return unsub;
+      }
+    }, 50);
+
+    return () => clearInterval(interval);
+  }, []);
 
   return logs;
 }

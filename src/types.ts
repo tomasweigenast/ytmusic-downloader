@@ -9,10 +9,11 @@ export const cliFlagsSchema = z.object({
   cookies: z.string().optional(),
   filenameTemplate: z
     .string()
-    .default("%(playlist_index)02d - %(title)s - %(artist)s.%(ext)s"),
+    .default("%(title)s - %(album)s - %(artist)s.%(ext)s"),
   skipUpdate: z.boolean().default(false),
   verbose: z.boolean().default(false),
   ytdlpChannel: z.enum(["stable", "nightly"]).default("stable"),
+  opus: z.boolean().default(false),
 });
 
 export type CliFlags = z.infer<typeof cliFlagsSchema>;
@@ -93,6 +94,7 @@ export interface Song {
   webpageUrl: string | null;
   thumbnail: string | null;
   filepath: string | null;
+  thumbnailPath: string | null;
   filesize: number | null;
   codec: string | null;
   bitrate: number | null;

@@ -15,6 +15,8 @@ export interface ProgressState {
   rateLimitDelayMs: number;
   active: Map<string, ActiveItem>;
   pending: string[];
+  phase: string;
+  recentErrors: string[];
 }
 
 export class ProgressStore {
@@ -26,6 +28,8 @@ export class ProgressStore {
     rateLimitDelayMs: 0,
     active: new Map(),
     pending: [],
+    phase: "",
+    recentErrors: [],
   };
   private listeners = new Set<() => void>();
 
@@ -38,7 +42,19 @@ export class ProgressStore {
       rateLimitDelayMs: 0,
       active: new Map(),
       pending: allTitles.slice(),
+      phase: "Downloading",
+      recentErrors: [],
     };
+    this.notify();
+  }
+
+  setPhase(phase: string): void {
+    this.state.phase = phase;
+    this.notify();
+  }
+
+  addError(message: string): void {
+    this.state.recentErrors = [...this.state.recentErrors.slice(-4), message];
     this.notify();
   }
 

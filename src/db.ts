@@ -55,6 +55,7 @@ const MIGRATIONS = [
     webpage_url TEXT,
     thumbnail TEXT,
     filepath TEXT,
+    thumbnail_path TEXT,
     filesize INTEGER,
     codec TEXT,
     bitrate INTEGER,
@@ -80,6 +81,7 @@ const MIGRATIONS = [
   `
   CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs(artist_id);
   `,
+  `ALTER TABLE songs ADD COLUMN thumbnail_path TEXT;`,
 ];
 
 export class MetadataDatabase {
@@ -94,7 +96,14 @@ export class MetadataDatabase {
 
   private migrate(): void {
     for (const migration of MIGRATIONS) {
-      this.db.run(migration);
+      try {
+        this.db.run(migration);
+      } catch (e) {
+        // Ignore "duplicate column" errors from ALTER TABLE migrations
+        if (!(e instanceof Error) || !e.message.includes("duplicate column")) {
+          throw e;
+        }
+      }
     }
   }
 
@@ -209,6 +218,7 @@ export class MetadataDatabase {
     webpageUrl: string | null;
     thumbnail: string | null;
     filepath: string | null;
+    thumbnailPath: string | null;
     filesize: number | null;
     codec: string | null;
     bitrate: number | null;
@@ -221,11 +231,11 @@ export class MetadataDatabase {
     const insert = this.db.query(
       `INSERT INTO songs (
          playlist_id, album_id, artist_id, source_id, track_number, title,
-         duration, webpage_url, thumbnail, filepath, filesize, codec, bitrate,
+         duration, webpage_url, thumbnail, filepath, thumbnail_path, filesize, codec, bitrate,
          sample_rate, channels, download_status, error_message, raw_json
        ) VALUES (
          $playlistId, $albumId, $artistId, $sourceId, $trackNumber, $title,
-         $duration, $webpageUrl, $thumbnail, $filepath, $filesize, $codec, $bitrate,
+         $duration, $webpageUrl, $thumbnail, $filepath, $thumbnailPath, $filesize, $codec, $bitrate,
          $sampleRate, $channels, $downloadStatus, $errorMessage, $rawJson
        )
        ON CONFLICT(playlist_id, source_id) DO UPDATE SET
@@ -237,6 +247,7 @@ export class MetadataDatabase {
          webpage_url = excluded.webpage_url,
          thumbnail = excluded.thumbnail,
          filepath = excluded.filepath,
+         thumbnail_path = excluded.thumbnail_path,
          filesize = excluded.filesize,
          codec = excluded.codec,
          bitrate = excluded.bitrate,
@@ -260,6 +271,7 @@ export class MetadataDatabase {
         $webpageUrl: song.webpageUrl,
         $thumbnail: song.thumbnail,
         $filepath: song.filepath,
+        $thumbnailPath: song.thumbnailPath,
         $filesize: song.filesize,
         $codec: song.codec,
         $bitrate: song.bitrate,
@@ -337,6 +349,7 @@ export class MetadataDatabase {
       webpageUrl: row.webpage_url as string | null,
       thumbnail: row.thumbnail as string | null,
       filepath: row.filepath as string | null,
+      thumbnailPath: row.thumbnail_path as string | null,
       filesize: row.filesize as number | null,
       codec: row.codec as string | null,
       bitrate: row.bitrate as number | null,

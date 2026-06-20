@@ -1,4 +1,4 @@
-import { readdir, readFile, unlink } from "fs/promises";
+import { readdir, readFile, unlink, mkdir } from "fs/promises";
 import { join, basename, extname } from "path";
 import type { AppConfig } from "./config.ts";
 import type { MetadataDatabase } from "./db.ts";
@@ -27,21 +27,23 @@ function buildArgs(
   const args = [
     config.ytdlpBinPath,
     "-f",
-    "bestaudio[ext=webm]/bestaudio/best",
+    config.opus
+      ? "bestaudio[ext=webm]/bestaudio[ext=opus]/bestaudio/best"
+      : "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
     "--extract-audio",
     "--audio-quality",
     "0",
     "--audio-format",
-    "best",
+    config.opus ? "opus" : "m4a",
     "--embed-metadata",
     "--embed-thumbnail",
     "--convert-thumbnails",
     "jpg",
+    "--write-thumbnail",
     "--write-info-json",
     "--no-clean-info-json",
     "--continue",
     "--no-overwrites",
-    "--no-warnings",
     "--no-colors",
     "--newline",
     "--progress-template",
@@ -50,6 +52,8 @@ function buildArgs(
     "playlist_index:%(track_number)s",
     "--output",
     join(config.outputDir, config.filenameTemplate),
+    "--output",
+    `thumbnail:${join(config.outputDir, "thumbnails", "%(id)s.%(ext)s")}`,
   ];
 
   if (config.cookiesFromBrowser) {
@@ -115,6 +119,21 @@ async function findAudioFile(outputDir: string, infoJsonPath: string): Promise<s
     return AUDIO_EXTENSIONS.has(ext) && f.slice(0, f.length - ext.length) === stem;
   });
   return match ? join(outputDir, match) : null;
+}
+
+const THUMBNAIL_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
+
+async function findThumbnailFile(thumbDir: string, sourceId: string): Promise<string | null> {
+  try {
+    const files = await readdir(thumbDir);
+    const match = files.find((f) => {
+      const ext = extname(f);
+      return THUMBNAIL_EXTENSIONS.has(ext) && basename(f, ext) === sourceId;
+    });
+    return match ? join(thumbDir, match) : null;
+  } catch {
+    return null;
+  }
 }
 
 async function readLines(
@@ -194,6 +213,7 @@ export async function downloadTrack(
   logger: Logger,
   onProgress?: (update: ProgressUpdate) => void,
 ): Promise<DownloadResult> {
+  await mkdir(join(config.outputDir, "thumbnails"), { recursive: true });
   const args = buildArgs(config, entry);
 
   const { exitCode, error } = await spawnYtdlp(
@@ -201,6 +221,8 @@ export async function downloadTrack(
     (update) => onProgress?.(update),
     logger,
   );
+
+  const thumbDir = join(config.outputDir, "thumbnails");
 
   if (exitCode !== 0) {
     const message = error || "yt-dlp exited with errors";
@@ -214,6 +236,7 @@ export async function downloadTrack(
       db,
       playlistId,
       normalized,
+      null,
       null,
       "failed",
       message,
@@ -233,13 +256,17 @@ export async function downloadTrack(
     const rawJson = await readFile(infoJsonPath, "utf-8");
     const normalized = normalizeMetadata(rawJson);
 
-    const filepath = await findAudioFile(config.outputDir, infoJsonPath);
+    const [filepath, thumbnailPath] = await Promise.all([
+      findAudioFile(config.outputDir, infoJsonPath),
+      findThumbnailFile(thumbDir, entry.id),
+    ]);
 
     const song = saveSongMetadata(
       db,
       playlistId,
       normalized,
       filepath,
+      thumbnailPath,
       "complete",
       null,
     );
@@ -260,6 +287,7 @@ export async function downloadTrack(
       db,
       playlistId,
       normalized,
+      null,
       null,
       "failed",
       error,

@@ -101,6 +101,7 @@ export function saveSongMetadata(
   playlistId: number,
   normalized: NormalizedSong,
   filepath: string | null,
+  thumbnailPath: string | null,
   status: "complete" | "failed",
   errorMessage: string | null,
 ): Song {
@@ -133,6 +134,7 @@ export function saveSongMetadata(
     webpageUrl: normalized.webpageUrl,
     thumbnail: normalized.thumbnail,
     filepath,
+    thumbnailPath,
     filesize: normalized.filesize,
     codec: normalized.codec,
     bitrate: normalized.bitrate,
