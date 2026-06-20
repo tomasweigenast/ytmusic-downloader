@@ -32,6 +32,11 @@ function startPlainProgress(progressStore: ProgressStore): () => void {
     const done = state.completed + state.failed + state.skipped;
     lines.push(`Progress: ${done}/${state.total}  (✓${state.completed} ✗${state.failed} ⊘${state.skipped})`);
 
+    if (state.rateLimitDelayMs > 0) {
+      const seconds = (state.rateLimitDelayMs / 1000).toFixed(1);
+      lines.push(`  ⚠ Rate limit active: next download waits ${seconds}s`);
+    }
+
     for (const item of active) {
       const bar = buildBar(item.percent, 30);
       const speed = item.speed ? `  ${item.speed}` : "";
@@ -104,17 +109,24 @@ async function runDownload(
     });
 
     logger.info(`Playlist saved: ${playlist.title}`);
-    progress.start(extracted.entries.length, extracted.entries.map((e) => e.title));
 
-    const pool = new WorkerPool(config.workers, logger);
+    const checks = extracted.entries.map((entry) => ({
+      entry,
+      check: checkExistingDownload(db, playlist.id, entry, config.outputDir),
+    }));
+    const toDownload = checks.filter(({ check }) => !check.skip);
+    const skipped = checks.filter(({ check }) => check.skip);
 
-    for (const entry of extracted.entries) {
-      const check = checkExistingDownload(db, playlist.id, entry);
-      if (check.skip) {
-        progress.setSkipped(entry.id, entry.title);
-        logger.debug(`Already downloaded: ${entry.title}`);
-        continue;
-      }
+    logger.info(`${toDownload.length} to download, ${skipped.length} already done`);
+    progress.start(toDownload.length, toDownload.map(({ entry }) => entry.title));
+
+    const pool = new WorkerPool(config.workers, logger, progress);
+
+    for (const { entry } of skipped) {
+      logger.debug(`Already downloaded: ${entry.title}`);
+    }
+
+    for (const { entry } of toDownload) {
 
       pool.run(async () => {
         progress.setActive(entry.id, entry.title);

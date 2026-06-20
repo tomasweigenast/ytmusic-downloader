@@ -26,6 +26,7 @@ function useProgressState(): ProgressState {
       completed: 0,
       failed: 0,
       skipped: 0,
+      rateLimitDelayMs: 0,
       active: new Map(),
       pending: [],
     }
@@ -63,6 +64,12 @@ export function ProgressPanel(): JSX.Element {
         <Text color="blue">{state.skipped}</Text> failed:{" "}
         <Text color="red">{state.failed}</Text> pending: {state.pending.length}
       </Text>
+
+      {state.rateLimitDelayMs > 0 && (
+        <Text color="yellow">
+          ⚠ Rate limit: next download waits {(state.rateLimitDelayMs / 1000).toFixed(1)}s
+        </Text>
+      )}
 
       <Box marginTop={1} flexDirection="column">
         <Text bold underline>

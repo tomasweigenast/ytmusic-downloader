@@ -12,6 +12,7 @@ export interface ProgressState {
   completed: number;
   failed: number;
   skipped: number;
+  rateLimitDelayMs: number;
   active: Map<string, ActiveItem>;
   pending: string[];
 }
@@ -22,6 +23,7 @@ export class ProgressStore {
     completed: 0,
     failed: 0,
     skipped: 0,
+    rateLimitDelayMs: 0,
     active: new Map(),
     pending: [],
   };
@@ -33,6 +35,7 @@ export class ProgressStore {
       completed: 0,
       failed: 0,
       skipped: 0,
+      rateLimitDelayMs: 0,
       active: new Map(),
       pending: allTitles.slice(),
     };
@@ -77,6 +80,11 @@ export class ProgressStore {
     this.state.active.delete(id);
     this.state.pending = this.state.pending.filter((t) => t !== title);
     this.state.skipped++;
+    this.notify();
+  }
+
+  setRateLimitDelay(ms: number): void {
+    this.state.rateLimitDelayMs = Math.max(0, Math.round(ms));
     this.notify();
   }
 

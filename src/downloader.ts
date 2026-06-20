@@ -1,5 +1,5 @@
 import { readdir, readFile, unlink } from "fs/promises";
-import { join } from "path";
+import { join, basename, extname } from "path";
 import type { AppConfig } from "./config.ts";
 import type { MetadataDatabase } from "./db.ts";
 import { normalizeMetadata, saveSongMetadata } from "./metadata.ts";
@@ -85,6 +85,8 @@ function parseProgressLine(line: string): ProgressUpdate | null {
   };
 }
 
+const AUDIO_EXTENSIONS = new Set([".opus", ".m4a", ".mp3", ".ogg", ".flac", ".wav", ".webm", ".aac"]);
+
 async function findInfoJson(outputDir: string, sourceId: string): Promise<string | null> {
   const files = await readdir(outputDir);
   const candidates = files.filter((f) => f.endsWith(".info.json"));
@@ -103,6 +105,16 @@ async function findInfoJson(outputDir: string, sourceId: string): Promise<string
   }
 
   return null;
+}
+
+async function findAudioFile(outputDir: string, infoJsonPath: string): Promise<string | null> {
+  const stem = basename(infoJsonPath, ".info.json");
+  const files = await readdir(outputDir);
+  const match = files.find((f) => {
+    const ext = extname(f);
+    return AUDIO_EXTENSIONS.has(ext) && f.slice(0, f.length - ext.length) === stem;
+  });
+  return match ? join(outputDir, match) : null;
 }
 
 async function readLines(
@@ -221,8 +233,7 @@ export async function downloadTrack(
     const rawJson = await readFile(infoJsonPath, "utf-8");
     const normalized = normalizeMetadata(rawJson);
 
-    const info = JSON.parse(rawJson) as { _filename?: string };
-    const filepath = info._filename ?? null;
+    const filepath = await findAudioFile(config.outputDir, infoJsonPath);
 
     const song = saveSongMetadata(
       db,

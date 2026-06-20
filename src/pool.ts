@@ -1,3 +1,4 @@
+import type { ProgressStore } from "./progress-store.ts";
 import type { Logger } from "./utils.ts";
 
 interface Task<T> {
@@ -16,6 +17,7 @@ export class WorkerPool {
   constructor(
     initialConcurrency: number,
     private readonly logger: Logger,
+    private readonly progressStore?: ProgressStore,
   ) {
     this.maxConcurrency = Math.max(1, initialConcurrency);
   }
@@ -33,6 +35,7 @@ export class WorkerPool {
     try {
       const result = await task.fn();
       task.resolve(result);
+      this.recordSuccess();
     } catch (err) {
       task.reject(err);
     } finally {
@@ -60,6 +63,13 @@ export class WorkerPool {
     });
   }
 
+  private recordSuccess(): void {
+    if (this.rateLimitDelayMs > 0) {
+      this.rateLimitDelayMs = Math.floor(this.rateLimitDelayMs / 2);
+      this.progressStore?.setRateLimitDelay(this.rateLimitDelayMs);
+    }
+  }
+
   registerRateLimit(): void {
     if (this.maxConcurrency > 1) {
       this.maxConcurrency--;
@@ -72,6 +82,8 @@ export class WorkerPool {
       Math.max(this.rateLimitDelayMs * 2, 2000),
       60000,
     );
+
+    this.progressStore?.setRateLimitDelay(this.rateLimitDelayMs);
   }
 
   async drain(): Promise<void> {
