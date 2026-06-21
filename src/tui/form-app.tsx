@@ -110,10 +110,11 @@ export function FormApp({ onSubmit, onCancel }: FormAppProps): JSX.Element {
         retries,
         cookiesFromBrowser: form.cookiesFromBrowser.trim() || undefined,
         cookies: form.cookies.trim() || undefined,
-        filenameTemplate: "%(playlist_index)02d - %(title)s - %(artist)s.%(ext)s",
+        filenameTemplate: "%(title)s - %(album)s - %(artist)s.%(ext)s",
         skipUpdate: form.skipUpdate,
         verbose: form.verbose,
         ytdlpChannel: "stable",
+        opus: false,
       });
     }
   });

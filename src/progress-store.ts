@@ -105,7 +105,7 @@ export class ProgressStore {
   }
 
   getState(): ProgressState {
-    return this.state;
+    return { ...this.state, active: new Map(this.state.active) };
   }
 
   subscribe(listener: () => void): () => void {

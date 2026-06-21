@@ -287,7 +287,7 @@ export class MetadataDatabase {
   updateSongFilepath(id: number, filepath: string): void {
     this.db.run(
       "UPDATE songs SET filepath = $filepath, updated_at = CURRENT_TIMESTAMP WHERE id = $id;",
-      { $id: id, $filepath: filepath },
+      [filepath, id],
     );
   }
 

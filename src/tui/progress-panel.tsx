@@ -43,102 +43,100 @@ function useProgressState(): ProgressState {
   return state;
 }
 
-function renderBar(pct: number, width: number): string {
-  const filled = Math.round(width * pct);
+function bar(pct: number, width: number): string {
+  const filled = Math.round(Math.min(1, pct) * width);
   return "█".repeat(filled) + "░".repeat(width - filled);
 }
 
-function truncate(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen - 1) + "…";
+function trunc(text: string, max: number): string {
+  return text.length <= max ? text : text.slice(0, max - 1) + "…";
 }
 
 export function ProgressPanel(): JSX.Element {
   const state = useProgressState();
   const { stdout } = useStdout();
-  const width = Math.max(40, (stdout.columns ?? 80) - 4);
-  const barWidth = Math.max(20, width - 16);
+  const cols = Math.max(40, (stdout?.columns ?? 80) - 4);
 
   const activeItems = Array.from(state.active.values());
-  const isStarting = state.total === 0;
-  const pct = state.total === 0 ? 0 : (state.completed + state.failed) / state.total;
+  const downloading = state.total > 0;
   const done = state.completed + state.failed;
+  const overallPct = state.total === 0 ? 0 : done / state.total;
+  const overallBarWidth = Math.max(20, cols - 12);
 
   return (
-    <Box flexDirection="column" padding={1} width={width}>
+    <Box flexDirection="column" padding={1}>
 
-      {/* Phase / status line */}
+      {/* Phase */}
       {state.phase ? (
         <Box marginBottom={1}>
-          <Text color="cyan">⟳ </Text>
-          <Text bold>{state.phase}</Text>
+          <Text color="cyan">⟳ </Text><Text bold>{state.phase}</Text>
         </Box>
       ) : null}
 
-      {/* Overall progress — hidden until downloading starts */}
-      {!isStarting && (
-        <>
-          <Box marginBottom={1}>
-            <Text color="green">{renderBar(pct, barWidth)}</Text>
-            <Text> {Math.round(pct * 100)}%</Text>
+      {/* Overall bar */}
+      {downloading && (
+        <Box flexDirection="column" marginBottom={1}>
+          <Box>
+            <Text color="green">{bar(overallPct, overallBarWidth)}</Text>
+            <Text> </Text>
+            <Text bold>{Math.round(overallPct * 100)}%</Text>
           </Box>
-          <Box marginBottom={1} gap={2}>
-            <Text><Text color="green">✓ {state.completed}</Text> done</Text>
-            <Text><Text color="red">✗ {state.failed}</Text> failed</Text>
-            <Text><Text color="blue">⊘ {state.skipped}</Text> skipped</Text>
-            <Text><Text color="yellow">⟳ {state.active.size}</Text> active</Text>
-            <Text color="gray">◦ {state.pending.length} pending</Text>
+          <Box>
+            <Text color="green">✓ {state.completed}</Text>
+            <Text> done  </Text>
+            <Text color="red">✗ {state.failed}</Text>
+            <Text> failed  </Text>
+            <Text color="blue">⊘ {state.skipped}</Text>
+            <Text> skipped  </Text>
+            <Text color="yellow">⟳ {state.active.size}</Text>
+            <Text> active  </Text>
+            <Text color="gray">◦ {state.pending.length} pending  </Text>
             <Text color="gray">{done}/{state.total}</Text>
           </Box>
-        </>
-      )}
-
-      {/* Rate limit warning */}
-      {state.rateLimitDelayMs > 0 && (
-        <Box marginBottom={1}>
-          <Text color="yellow">⚠ Rate limit — next download waits {(state.rateLimitDelayMs / 1000).toFixed(1)}s</Text>
         </Box>
       )}
 
-      {/* Active downloads */}
+      {/* Rate limit */}
+      {state.rateLimitDelayMs > 0 && (
+        <Box marginBottom={1}>
+          <Text color="yellow">⚠ Rate limit — next waits {(state.rateLimitDelayMs / 1000).toFixed(1)}s</Text>
+        </Box>
+      )}
+
+      {/* Active downloads with per-song bars */}
       {activeItems.length > 0 && (
         <Box flexDirection="column" marginBottom={1}>
-          <Text bold underline>Active</Text>
+          <Text bold underline>Downloading</Text>
           {activeItems.map((item) => {
             const elapsed = formatDuration((Date.now() - item.startedAt) / 1000);
-            const itemBarWidth = Math.max(10, width - 52);
-            const itemPct = item.percent / 100;
-            const bar = renderBar(itemPct, itemBarWidth);
+            const pct = item.percent / 100;
+            const songBar = bar(pct, 12);
+            const pctStr = item.percent > 0 ? `${item.percent.toFixed(0)}%` : "---%";
+            const speed = item.speed || "";
+            const titleWidth = Math.max(10, cols - 40);
             return (
-              <Box key={item.id} flexDirection="column">
-                <Box gap={1}>
-                  <Text color="yellow">▸</Text>
-                  <Text color="gray">{elapsed}</Text>
-                  <Text>{truncate(item.title, width - 14)}</Text>
-                </Box>
-                {item.percent > 0 && (
-                  <Box gap={1} paddingLeft={2}>
-                    <Text color="green">{bar}</Text>
-                    <Text color="cyan">{item.percent.toFixed(1)}%</Text>
-                    {item.speed ? <Text color="gray">{item.speed}</Text> : null}
-                    {item.eta ? <Text color="gray">ETA {item.eta}</Text> : null}
-                  </Box>
-                )}
+              <Box key={item.id}>
+                <Text color="yellow">▸ </Text>
+                <Text color="gray">{elapsed} </Text>
+                <Text>{trunc(item.title, titleWidth)} </Text>
+                <Text color={item.percent > 0 ? "green" : "gray"}>{songBar}</Text>
+                <Text color="cyan"> {pctStr}</Text>
+                {speed ? <Text color="gray">  {speed}</Text> : null}
               </Box>
             );
           })}
         </Box>
       )}
 
-      {/* Pending queue */}
+      {/* Pending */}
       {state.pending.length > 0 && (
         <Box flexDirection="column" marginBottom={1}>
           <Text bold underline>Up next</Text>
-          {state.pending.slice(0, 5).map((title, i) => (
-            <Text key={i} color="gray">◦ {truncate(title, width - 4)}</Text>
+          {state.pending.slice(0, 4).map((title, i) => (
+            <Text key={i} color="gray">◦ {trunc(title, cols - 4)}</Text>
           ))}
-          {state.pending.length > 5 && (
-            <Text color="gray">  … and {state.pending.length - 5} more</Text>
+          {state.pending.length > 4 && (
+            <Text color="gray">  … and {state.pending.length - 4} more</Text>
           )}
         </Box>
       )}
@@ -148,7 +146,7 @@ export function ProgressPanel(): JSX.Element {
         <Box flexDirection="column">
           <Text bold underline color="red">Recent failures</Text>
           {state.recentErrors.map((err, i) => (
-            <Text key={i} color="red">✗ {truncate(err, width - 4)}</Text>
+            <Text key={i} color="red">✗ {trunc(err, cols - 4)}</Text>
           ))}
         </Box>
       )}

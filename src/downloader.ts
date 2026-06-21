@@ -226,6 +226,20 @@ export async function downloadTrack(
 
   if (exitCode !== 0) {
     const message = error || "yt-dlp exited with errors";
+
+    // Clean up any leftover files yt-dlp wrote before failing
+    const infoJsonPath = await findInfoJson(config.outputDir, entry.id);
+    if (infoJsonPath) {
+      const stem = basename(infoJsonPath, ".info.json");
+      await Promise.allSettled([
+        unlink(infoJsonPath),
+        ...Array.from(THUMBNAIL_EXTENSIONS).map((ext) =>
+          unlink(join(config.outputDir, stem + ext)),
+        ),
+      ]);
+      logger.debug(`Cleaned up leftover files for failed track: ${entry.id}`);
+    }
+
     const normalized = normalizeMetadata(JSON.stringify({
       id: entry.id,
       title: entry.title,
