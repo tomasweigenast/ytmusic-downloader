@@ -14,6 +14,7 @@ export const cliFlagsSchema = z.object({
   verbose: z.boolean().default(false),
   ytdlpChannel: z.enum(["stable", "nightly"]).default("stable"),
   opus: z.boolean().default(false),
+  manualFollowRedirects: z.boolean().default(false),
 });
 
 export type CliFlags = z.infer<typeof cliFlagsSchema>;

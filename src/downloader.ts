@@ -21,9 +21,20 @@ export interface ProgressUpdate {
 
 const PROGRESS_RE = /^(\S+)\s+(\S+%)\s+(\S+)\s+ETA\s+(\S+)/;
 
+const PLAYER_CLIENT_FALLBACK_ORDER = [
+  "web_music",
+  "android_music",
+  "ios",
+  "android",
+  "web",
+] as const;
+
+type PlayerClient = (typeof PLAYER_CLIENT_FALLBACK_ORDER)[number];
+
 function buildArgs(
   config: AppConfig,
   entry: PlaylistEntry,
+  playerClient: PlayerClient = "web_music",
 ): string[] {
   const args = [
     config.ytdlpBinPath,
@@ -48,7 +59,7 @@ function buildArgs(
     "--no-colors",
     "--newline",
     "--extractor-args",
-    "youtube:player_client=web_music",
+    `youtube:player_client=${playerClient}`,
     "--progress-template",
     "download:%(info.id)s %(progress._percent_str)s %(progress._speed_str)s ETA %(progress._eta_str)s",
     "--parse-metadata",
@@ -182,7 +193,8 @@ async function spawnYtdlp(
     stderr: "pipe",
   });
 
-  let errorSummary = "";
+  let errorLine = "";
+  let lastRelevantLine = "";
 
   const readStdout = async (): Promise<void> => {
     await readLines(proc.stdout, (line) => {
@@ -195,18 +207,75 @@ async function spawnYtdlp(
 
   const readStderr = async (): Promise<void> => {
     await readLines(proc.stderr, (line) => {
-      // Keep the last non-progress error line for diagnostics
       const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith("[download]") && !trimmed.startsWith("[ExtractAudio]") && !trimmed.startsWith("[Metadata]")) {
-        errorSummary = trimmed;
+      if (!trimmed || trimmed.startsWith("[download]") || trimmed.startsWith("[ExtractAudio]") || trimmed.startsWith("[Metadata]")) return;
+      if (!errorLine && trimmed.startsWith("ERROR:")) {
+        errorLine = trimmed;
       }
+      lastRelevantLine = trimmed;
     });
   };
 
   await Promise.all([readStdout(), readStderr()]);
   const exitCode = await proc.exited;
 
-  return { exitCode, error: errorSummary };
+  return { exitCode, error: errorLine || lastRelevantLine };
+}
+
+async function resolveRedirect(
+  config: AppConfig,
+  entry: PlaylistEntry,
+  logger: Logger,
+): Promise<PlaylistEntry> {
+  // Try each player client — some clients surface the redirected video ID
+  // while others fail on geo-restricted or replaced tracks.
+  for (const client of PLAYER_CLIENT_FALLBACK_ORDER) {
+    const resolveArgs = [
+      config.ytdlpBinPath,
+      "--no-download",
+      "--print", "webpage_url",
+      "--no-warnings",
+      "--extractor-args", `youtube:player_client=${client}`,
+    ];
+
+    if (config.cookiesFromBrowser) {
+      resolveArgs.push("--cookies-from-browser", config.cookiesFromBrowser);
+    }
+    if (config.cookies) {
+      resolveArgs.push("--cookies", config.cookies);
+    }
+
+    resolveArgs.push(entry.url);
+
+    const proc = Bun.spawn(resolveArgs, { stdout: "pipe", stderr: "pipe" });
+    const stdout = await new Response(proc.stdout).text();
+    await proc.exited;
+
+    const resolvedUrl = stdout.trim();
+    if (!resolvedUrl) {
+      logger.debug(`Redirect probe "${entry.title}" [${client}]: no output`);
+      continue;
+    }
+
+    const match = /[?&]v=([a-zA-Z0-9_-]{11})/.exec(resolvedUrl);
+    const resolvedId = match?.[1] ?? null;
+
+    if (!resolvedId) {
+      logger.debug(`Redirect probe "${entry.title}" [${client}]: unparseable URL: ${resolvedUrl}`);
+      continue;
+    }
+
+    if (resolvedId !== entry.id) {
+      logger.info(`Redirect resolved via ${client}: "${entry.title}" ${entry.id} → ${resolvedId}`);
+      return { ...entry, id: resolvedId, url: `https://music.youtube.com/watch?v=${resolvedId}` };
+    }
+
+    // Same ID — no redirect, no need to try other clients
+    logger.debug(`Redirect probe "${entry.title}" [${client}]: no redirect (${resolvedId})`);
+    return entry;
+  }
+
+  return entry;
 }
 
 export async function downloadTrack(
@@ -218,110 +287,99 @@ export async function downloadTrack(
   onProgress?: (update: ProgressUpdate) => void,
 ): Promise<DownloadResult> {
   await mkdir(join(config.outputDir, "thumbnails"), { recursive: true });
-  const args = buildArgs(config, entry);
 
-  let resolvedId = entry.id;
-  const { exitCode, error } = await spawnYtdlp(
-    args,
-    (update) => {
-      if (update.actualId) resolvedId = update.actualId;
-      onProgress?.(update);
-    },
-    logger,
-  );
-
-  if (resolvedId !== entry.id) {
-    logger.debug(`Track ${entry.id} redirected to ${resolvedId}`);
+  if (config.manualFollowRedirects) {
+    entry = await resolveRedirect(config, entry, logger);
   }
 
   const thumbDir = join(config.outputDir, "thumbnails");
+  let lastError = "";
 
-  if (exitCode !== 0) {
-    const message = error || "yt-dlp exited with errors";
+  for (const playerClient of PLAYER_CLIENT_FALLBACK_ORDER) {
+    const args = buildArgs(config, entry, playerClient);
 
-    // Clean up any leftover files yt-dlp wrote before failing
-    const infoJsonPath = await findInfoJson(config.outputDir, resolvedId);
-    if (infoJsonPath) {
-      const stem = basename(infoJsonPath, ".info.json");
-      await Promise.allSettled([
-        unlink(infoJsonPath),
-        ...Array.from(THUMBNAIL_EXTENSIONS).map((ext) =>
-          unlink(join(config.outputDir, stem + ext)),
-        ),
-        ...Array.from(AUDIO_EXTENSIONS).map((ext) =>
-          unlink(join(config.outputDir, stem + ext)),
-        ),
+    let resolvedId = entry.id;
+    const { exitCode, error } = await spawnYtdlp(
+      args,
+      (update) => {
+        if (update.actualId) resolvedId = update.actualId;
+        onProgress?.(update);
+      },
+      logger,
+    );
+
+    if (resolvedId !== entry.id) {
+      logger.info(`Track "${entry.title}" resolved by yt-dlp [${playerClient}]: ${entry.id} → ${resolvedId}`);
+    }
+
+    if (exitCode !== 0) {
+      lastError = error || "yt-dlp exited with errors";
+      const isUnavailable = lastError.includes("Video unavailable") || lastError.includes("This video is not available");
+
+      const infoJsonPath = await findInfoJson(config.outputDir, resolvedId);
+      if (infoJsonPath) {
+        const stem = basename(infoJsonPath, ".info.json");
+        await Promise.allSettled([
+          unlink(infoJsonPath),
+          ...Array.from(THUMBNAIL_EXTENSIONS).map((ext) => unlink(join(config.outputDir, stem + ext))),
+          ...Array.from(AUDIO_EXTENSIONS).map((ext) => unlink(join(config.outputDir, stem + ext))),
+        ]);
+      }
+
+      if (isUnavailable && playerClient !== PLAYER_CLIENT_FALLBACK_ORDER.at(-1)) {
+        logger.warn(`"${entry.title}" unavailable with [${playerClient}], trying next client…`);
+        continue;
+      }
+
+      const normalized = normalizeMetadata(JSON.stringify({
+        id: entry.id,
+        title: entry.title,
+        playlist_index: entry.playlistIndex,
+      }));
+
+      const song = saveSongMetadata(db, playlistId, normalized, null, null, "failed", lastError);
+      return { success: false, song, error: lastError };
+    }
+
+    try {
+      const infoJsonPath = await findInfoJson(config.outputDir, resolvedId);
+      if (!infoJsonPath) {
+        throw new Error(`Could not find info JSON for track ${entry.id} (resolved: ${resolvedId}) after download`);
+      }
+
+      const rawJson = await readFile(infoJsonPath, "utf-8");
+      const normalized = normalizeMetadata(rawJson);
+
+      const [filepath, thumbnailPath] = await Promise.all([
+        findAudioFile(config.outputDir, infoJsonPath),
+        findThumbnailFile(thumbDir, resolvedId),
       ]);
-      logger.debug(`Cleaned up leftover files for failed track: ${entry.id}`);
+
+      const song = saveSongMetadata(db, playlistId, normalized, filepath, thumbnailPath, "complete", null);
+
+      await unlink(infoJsonPath);
+      logger.debug(`Deleted info JSON: ${infoJsonPath}`);
+
+      return { success: true, song, error: null };
+    } catch (err) {
+      const catchError = err instanceof Error ? err.message : String(err);
+      const normalized = normalizeMetadata(JSON.stringify({
+        id: entry.id,
+        title: entry.title,
+        playlist_index: entry.playlistIndex,
+      }));
+
+      const song = saveSongMetadata(db, playlistId, normalized, null, null, "failed", catchError);
+      return { success: false, song, error: catchError };
     }
-
-    const normalized = normalizeMetadata(JSON.stringify({
-      id: entry.id,
-      title: entry.title,
-      playlist_index: entry.playlistIndex,
-    }));
-
-    const song = saveSongMetadata(
-      db,
-      playlistId,
-      normalized,
-      null,
-      null,
-      "failed",
-      message,
-    );
-
-    return { success: false, song, error: message };
   }
 
-  try {
-    const infoJsonPath = await findInfoJson(config.outputDir, resolvedId);
-    if (!infoJsonPath) {
-      throw new Error(
-        `Could not find info JSON for track ${entry.id} (resolved: ${resolvedId}) after download`,
-      );
-    }
-
-    const rawJson = await readFile(infoJsonPath, "utf-8");
-    const normalized = normalizeMetadata(rawJson);
-
-    const [filepath, thumbnailPath] = await Promise.all([
-      findAudioFile(config.outputDir, infoJsonPath),
-      findThumbnailFile(thumbDir, resolvedId),
-    ]);
-
-    const song = saveSongMetadata(
-      db,
-      playlistId,
-      normalized,
-      filepath,
-      thumbnailPath,
-      "complete",
-      null,
-    );
-
-    await unlink(infoJsonPath);
-    logger.debug(`Deleted info JSON: ${infoJsonPath}`);
-
-    return { success: true, song, error: null };
-  } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    const normalized = normalizeMetadata(JSON.stringify({
-      id: entry.id,
-      title: entry.title,
-      playlist_index: entry.playlistIndex,
-    }));
-
-    const song = saveSongMetadata(
-      db,
-      playlistId,
-      normalized,
-      null,
-      null,
-      "failed",
-      error,
-    );
-
-    return { success: false, song, error };
-  }
+  // Exhausted all player clients
+  const normalized = normalizeMetadata(JSON.stringify({
+    id: entry.id,
+    title: entry.title,
+    playlist_index: entry.playlistIndex,
+  }));
+  const song = saveSongMetadata(db, playlistId, normalized, null, null, "failed", lastError);
+  return { success: false, song, error: lastError };
 }

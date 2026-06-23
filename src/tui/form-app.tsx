@@ -115,6 +115,7 @@ export function FormApp({ onSubmit, onCancel }: FormAppProps): JSX.Element {
         verbose: form.verbose,
         ytdlpChannel: "stable",
         opus: false,
+        manualFollowRedirects: false,
       });
     }
   });

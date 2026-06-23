@@ -253,6 +253,7 @@ async function main(): Promise<void> {
     })
     .option("--skip-update", "Skip yt-dlp update check")
     .option("--opus", "Use Opus format instead of M4A (smaller files, less compatible cover art)")
+    .option("--manual-follow-redirects", "Resolve YouTube Music redirects before passing URLs to yt-dlp")
     .option("--verbose", "Enable verbose logging")
     .option("--no-tui", "Disable the TUI and print logs to stdout")
     .option(
