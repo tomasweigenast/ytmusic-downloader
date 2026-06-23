@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { cac } from "cac";
 import { $ } from "bun";
+import { writeFileSync } from "fs";
 import { mkdirSync } from "fs";
 import { join } from "path";
 import { cliFlagsSchema, type CliFlags } from "./types.ts";
@@ -15,6 +16,7 @@ import { LogStore, setGlobalLogStore } from "./log-store.ts";
 import { ProgressStore, setGlobalProgressStore } from "./progress-store.ts";
 import { runFormTui, renderDownloadTui } from "./tui/index.tsx";
 import { Logger } from "./utils.ts";
+import { startBgutilServer } from "./bgutil-manager.ts";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -214,8 +216,15 @@ async function runWithFlags(flags: CliFlags, useTui: boolean): Promise<void> {
       logger.warn("ffmpeg not found in PATH. Audio extraction and thumbnail embedding may fail.");
     }
 
+    progressStore.setPhase("Starting POT server…");
+    const bgutil = await startBgutilServer(logger);
+
     progressStore.setPhase("Fetching playlist…");
-    await runDownload(config, logger, progressStore);
+    try {
+      await runDownload(config, logger, progressStore);
+    } finally {
+      bgutil?.stop();
+    }
   } finally {
     tuiUnmount?.();
   }
@@ -250,6 +259,27 @@ async function main(): Promise<void> {
       "--ytdlp-channel <channel>",
       "yt-dlp release channel to use: stable or nightly (default: stable)",
     );
+
+  cli
+    .command("export-failed <db-path>", "Export failed song URLs to a text file")
+    .option("--output <file>", "Output file path", { default: "failed.txt" })
+    .action((dbPath: string, options: { output: string }) => {
+      const db = new MetadataDatabase(dbPath);
+      const failed = db.getFailedSongs();
+      db.close();
+
+      if (failed.length === 0) {
+        console.log("No failed songs.");
+        return;
+      }
+
+      const lines = failed.map(
+        ({ title, sourceId, errorMessage }) =>
+          `https://music.youtube.com/watch?v=${sourceId}\t${title}\t${errorMessage ?? ""}`,
+      );
+      writeFileSync(options.output, lines.join("\n") + "\n");
+      console.log(`Exported ${failed.length} failed songs to ${options.output}`);
+    });
 
   const parsed = cli.parse();
 

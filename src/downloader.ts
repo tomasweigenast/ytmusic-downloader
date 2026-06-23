@@ -16,6 +16,7 @@ export interface ProgressUpdate {
   percent: number;
   speed: string;
   eta: string;
+  actualId: string | null;
 }
 
 const PROGRESS_RE = /^(\S+)\s+(\S+%)\s+(\S+)\s+ETA\s+(\S+)/;
@@ -46,6 +47,8 @@ function buildArgs(
     "--no-overwrites",
     "--no-colors",
     "--newline",
+    "--extractor-args",
+    "youtube:player_client=web_music",
     "--progress-template",
     "download:%(info.id)s %(progress._percent_str)s %(progress._speed_str)s ETA %(progress._eta_str)s",
     "--parse-metadata",
@@ -86,6 +89,7 @@ function parseProgressLine(line: string): ProgressUpdate | null {
     percent,
     speed: match[3] ?? "",
     eta: match[4] ?? "",
+    actualId: match[1] ?? null,
   };
 }
 
@@ -193,7 +197,7 @@ async function spawnYtdlp(
     await readLines(proc.stderr, (line) => {
       // Keep the last non-progress error line for diagnostics
       const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith("[download]") && !trimmed.startsWith("[ExtractAudio]") && !trimmed.startsWith("[Metadata]") && !trimmed.startsWith("[ThumbnailsConvertor]")) {
+      if (trimmed && !trimmed.startsWith("[download]") && !trimmed.startsWith("[ExtractAudio]") && !trimmed.startsWith("[Metadata]")) {
         errorSummary = trimmed;
       }
     });
@@ -216,11 +220,19 @@ export async function downloadTrack(
   await mkdir(join(config.outputDir, "thumbnails"), { recursive: true });
   const args = buildArgs(config, entry);
 
+  let resolvedId = entry.id;
   const { exitCode, error } = await spawnYtdlp(
     args,
-    (update) => onProgress?.(update),
+    (update) => {
+      if (update.actualId) resolvedId = update.actualId;
+      onProgress?.(update);
+    },
     logger,
   );
+
+  if (resolvedId !== entry.id) {
+    logger.debug(`Track ${entry.id} redirected to ${resolvedId}`);
+  }
 
   const thumbDir = join(config.outputDir, "thumbnails");
 
@@ -228,12 +240,15 @@ export async function downloadTrack(
     const message = error || "yt-dlp exited with errors";
 
     // Clean up any leftover files yt-dlp wrote before failing
-    const infoJsonPath = await findInfoJson(config.outputDir, entry.id);
+    const infoJsonPath = await findInfoJson(config.outputDir, resolvedId);
     if (infoJsonPath) {
       const stem = basename(infoJsonPath, ".info.json");
       await Promise.allSettled([
         unlink(infoJsonPath),
         ...Array.from(THUMBNAIL_EXTENSIONS).map((ext) =>
+          unlink(join(config.outputDir, stem + ext)),
+        ),
+        ...Array.from(AUDIO_EXTENSIONS).map((ext) =>
           unlink(join(config.outputDir, stem + ext)),
         ),
       ]);
@@ -260,10 +275,10 @@ export async function downloadTrack(
   }
 
   try {
-    const infoJsonPath = await findInfoJson(config.outputDir, entry.id);
+    const infoJsonPath = await findInfoJson(config.outputDir, resolvedId);
     if (!infoJsonPath) {
       throw new Error(
-        `Could not find info JSON for track ${entry.id} after download`,
+        `Could not find info JSON for track ${entry.id} (resolved: ${resolvedId}) after download`,
       );
     }
 
@@ -272,7 +287,7 @@ export async function downloadTrack(
 
     const [filepath, thumbnailPath] = await Promise.all([
       findAudioFile(config.outputDir, infoJsonPath),
-      findThumbnailFile(thumbDir, entry.id),
+      findThumbnailFile(thumbDir, resolvedId),
     ]);
 
     const song = saveSongMetadata(

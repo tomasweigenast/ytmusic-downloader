@@ -305,6 +305,17 @@ export class MetadataDatabase {
     return row ? this.mapSong(row) : null;
   }
 
+  getFailedSongs(): Array<{ title: string; sourceId: string; errorMessage: string | null }> {
+    const query = this.db.prepare(
+      `SELECT title, source_id, error_message FROM songs WHERE download_status = 'failed'`,
+    );
+    return (query.all() as Record<string, unknown>[]).map((row) => ({
+      title: row.title as string,
+      sourceId: row.source_id as string,
+      errorMessage: row.error_message as string | null,
+    }));
+  }
+
   private mapPlaylist(row: Record<string, unknown>): Playlist {
     return {
       id: row.id as number,
