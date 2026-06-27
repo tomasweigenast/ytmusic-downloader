@@ -222,13 +222,51 @@ async function spawnYtdlp(
   return { exitCode, error: errorLine || lastRelevantLine };
 }
 
+// Regex targets INITIAL_ENDPOINT.watchEndpoint.videoId embedded in ytcfg.set() on YTMusic pages.
+// The data is JSON-encoded inside a JS string so quotes appear as \" in the raw HTML.
+// See: https://github.com/yt-dlp/yt-dlp/issues/14066
+const YTCFG_VIDEO_ID_RE = /watchEndpoint\\":\{\\"videoId\\":\\"([a-zA-Z0-9_-]{11})\\"/;
+
+async function resolveRedirectViaHtml(entry: PlaylistEntry, logger: Logger): Promise<PlaylistEntry | null> {
+  try {
+    const response = await fetch(`https://music.youtube.com/watch?v=${entry.id}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:144.0) Gecko/20100101 Firefox/144.0",
+      },
+    });
+    const html = await response.text();
+    const match = YTCFG_VIDEO_ID_RE.exec(html);
+    const redirectedId = match?.[1];
+
+    if (!redirectedId) {
+      logger.debug(`Redirect probe "${entry.title}": no watchEndpoint in page HTML`);
+      return null;
+    }
+
+    if (redirectedId === entry.id) {
+      logger.debug(`Redirect probe "${entry.title}": no redirect (same ID ${entry.id})`);
+      return entry;
+    }
+
+    logger.info(`Redirect resolved via HTML: "${entry.title}" ${entry.id} → ${redirectedId}`);
+    return { ...entry, id: redirectedId, url: `https://music.youtube.com/watch?v=${redirectedId}` };
+  } catch (err) {
+    logger.debug(`Redirect probe "${entry.title}": fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
 async function resolveRedirect(
   config: AppConfig,
   entry: PlaylistEntry,
   logger: Logger,
 ): Promise<PlaylistEntry> {
-  // Try each player client — some clients surface the redirected video ID
-  // while others fail on geo-restricted or replaced tracks.
+  // Step 1: fast HTML fetch — reads ytcfg.set() INITIAL_ENDPOINT.watchEndpoint.videoId.
+  // Works without cookies; no subprocess needed.
+  const htmlResult = await resolveRedirectViaHtml(entry, logger);
+  if (htmlResult !== null) return htmlResult;
+
+  // Step 2: yt-dlp fallback — only if the HTML fetch itself failed (network error, etc.)
   for (const client of PLAYER_CLIENT_FALLBACK_ORDER) {
     const resolveArgs = [
       config.ytdlpBinPath,
@@ -253,7 +291,7 @@ async function resolveRedirect(
 
     const resolvedUrl = stdout.trim();
     if (!resolvedUrl) {
-      logger.debug(`Redirect probe "${entry.title}" [${client}]: no output`);
+      logger.debug(`Redirect probe "${entry.title}" [yt-dlp/${client}]: no output`);
       continue;
     }
 
@@ -261,17 +299,16 @@ async function resolveRedirect(
     const resolvedId = match?.[1] ?? null;
 
     if (!resolvedId) {
-      logger.debug(`Redirect probe "${entry.title}" [${client}]: unparseable URL: ${resolvedUrl}`);
+      logger.debug(`Redirect probe "${entry.title}" [yt-dlp/${client}]: unparseable URL: ${resolvedUrl}`);
       continue;
     }
 
     if (resolvedId !== entry.id) {
-      logger.info(`Redirect resolved via ${client}: "${entry.title}" ${entry.id} → ${resolvedId}`);
+      logger.info(`Redirect resolved via yt-dlp/${client}: "${entry.title}" ${entry.id} → ${resolvedId}`);
       return { ...entry, id: resolvedId, url: `https://music.youtube.com/watch?v=${resolvedId}` };
     }
 
-    // Same ID — no redirect, no need to try other clients
-    logger.debug(`Redirect probe "${entry.title}" [${client}]: no redirect (${resolvedId})`);
+    logger.debug(`Redirect probe "${entry.title}" [yt-dlp/${client}]: no redirect (${resolvedId})`);
     return entry;
   }
 
